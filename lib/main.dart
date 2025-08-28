@@ -36,6 +36,8 @@ Future<void> setWindowsAppSizeAndPosition({
 }
 
 class PlaylistConverterApp extends StatelessWidget {
+  const PlaylistConverterApp({super.key});
+
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
@@ -50,6 +52,8 @@ class PlaylistConverterApp extends StatelessWidget {
 }
 
 class ZipPlaylistConverterScreen extends StatefulWidget {
+  const ZipPlaylistConverterScreen({super.key});
+
   @override
   _ZipPlaylistConverterScreenState createState() => _ZipPlaylistConverterScreenState();
 }
@@ -67,7 +71,6 @@ class _ZipPlaylistConverterScreenState extends State<ZipPlaylistConverterScreen>
     setState(() {
       _logMessages.add('${DateTime.now().toString().substring(11, 19)}: $message');
     });
-    print(message);
   }
 
   Future<void> _selectZipFile() async {
@@ -249,7 +252,7 @@ class _ZipPlaylistConverterScreenState extends State<ZipPlaylistConverterScreen>
 
       // Sauvegarder le nouveau ZIP
       final zipData = ZipEncoder().encode(outputArchive);
-      await File(_outputZipPath).writeAsBytes(zipData!);
+      await File(_outputZipPath).writeAsBytes(zipData);
       
       _addLog('✓ Nouveau ZIP sauvegardé: ${path.basename(_outputZipPath)}');
 
@@ -287,7 +290,7 @@ class _ZipPlaylistConverterScreenState extends State<ZipPlaylistConverterScreen>
                 child: Text('Ouvrir le dossier'),
                 onPressed: () {
                   Navigator.of(context).pop();
-                  Process.run('explorer', ['/select,${_outputZipPath}']);
+                  Process.run('explorer', ['/select,$_outputZipPath']);
                 },
               ),
               TextButton(
