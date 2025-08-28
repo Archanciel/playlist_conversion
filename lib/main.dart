@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:path/path.dart' as path;
+import 'package:permission_handler/permission_handler.dart';
 import 'package:window_size/window_size.dart';
 import 'package:archive/archive.dart';
 
@@ -68,8 +69,25 @@ class _PlaylistConverterScreenState extends State<PlaylistConverterScreen> {
     print(message);
   }
 
+  Future<void> _requestPermissions() async {
+    if (Platform.isAndroid) {
+      Map<Permission, PermissionStatus> statuses = await [
+        Permission.storage,
+        Permission.manageExternalStorage,
+      ].request();
+      
+      _addLog('Storage permission: ${statuses[Permission.storage]}');
+      _addLog('Manage external storage permission: ${statuses[Permission.manageExternalStorage]}');
+    }
+  }
+
   Future<void> _selectDirectory() async {
     try {
+      // Request permissions on Android
+      if (Platform.isAndroid) {
+        await _requestPermissions();
+      }
+      
       String? selectedDirectory = await FilePicker.platform.getDirectoryPath();
       
       if (selectedDirectory != null) {
@@ -78,6 +96,20 @@ class _PlaylistConverterScreenState extends State<PlaylistConverterScreen> {
           _logMessages.clear();
         });
         _addLog('Selected directory: $_selectedPath');
+        
+        // Test directory access
+        try {
+          Directory testDir = Directory(_selectedPath);
+          bool canAccess = await testDir.exists();
+          _addLog('Directory accessible: $canAccess');
+          
+          if (canAccess) {
+            List<FileSystemEntity> entities = await testDir.list().toList();
+            _addLog('Found ${entities.length} items in directory');
+          }
+        } catch (e) {
+          _addLog('Cannot access directory: $e');
+        }
       }
     } catch (e) {
       _addLog('Error selecting directory: $e');
@@ -102,7 +134,24 @@ class _PlaylistConverterScreenState extends State<PlaylistConverterScreen> {
 
   Future<int> _processPlaylistFile(String filePath) async {
     try {
-      String content = await File(filePath).readAsString();
+      _addLog('Attempting to read: ${path.basename(filePath)}');
+      
+      // Check if file exists and is readable
+      File file = File(filePath);
+      if (!await file.exists()) {
+        _addLog('File does not exist: ${path.basename(filePath)}');
+        return 0;
+      }
+      
+      // Try to get file stats to check permissions
+      try {
+        FileStat stats = await file.stat();
+        _addLog('File size: ${stats.size} bytes, modified: ${stats.modified}');
+      } catch (e) {
+        _addLog('Cannot get file stats: $e');
+      }
+      
+      String content = await file.readAsString();
       Map<String, dynamic> playlistData = json.decode(content);
       
       int audioModifiedCount = 0;
@@ -135,13 +184,15 @@ class _PlaylistConverterScreenState extends State<PlaylistConverterScreen> {
       // Write back only if we found isAudioImported fields
       if (hasIsAudioImported) {
         String modifiedContent = JsonEncoder.withIndent('  ').convert(playlistData);
-        await File(filePath).writeAsString(modifiedContent);
-        _addLog('Converted $audioModifiedCount audio objects in ${path.basename(filePath)}');
+        await file.writeAsString(modifiedContent);
+        _addLog('✓ Converted $audioModifiedCount audio objects in ${path.basename(filePath)}');
+      } else {
+        _addLog('No isAudioImported fields found in ${path.basename(filePath)}');
       }
       
       return audioModifiedCount;
     } catch (e) {
-      _addLog('Error processing ${path.basename(filePath)}: $e');
+      _addLog('❌ Error processing ${path.basename(filePath)}: $e');
       return 0;
     }
   }
@@ -164,14 +215,28 @@ class _PlaylistConverterScreenState extends State<PlaylistConverterScreen> {
     try {
       Directory rootDir = Directory(_selectedPath);
       
-      await for (FileSystemEntity entity in rootDir.list()) {
+      if (!await rootDir.exists()) {
+        _addLog('Selected directory does not exist or is not accessible');
+        setState(() => _isProcessing = false);
+        return;
+      }
+      
+      List<FileSystemEntity> entities = await rootDir.list().toList();
+      _addLog('Scanning ${entities.length} items in selected directory...');
+      
+      int processedDirs = 0;
+      
+      for (FileSystemEntity entity in entities) {
         if (!_isProcessing) break;
         
         if (entity is Directory) {
           String playlistName = path.basename(entity.path);
           String jsonFilePath = path.join(entity.path, '$playlistName.json');
           
+          _addLog('Checking for: $jsonFilePath');
+          
           if (await File(jsonFilePath).exists()) {
+            processedDirs++;
             int modifiedCount = await _processPlaylistFile(jsonFilePath);
             if (modifiedCount > 0) {
               setState(() {
@@ -179,9 +244,14 @@ class _PlaylistConverterScreenState extends State<PlaylistConverterScreen> {
                 _totalAudiosModified += modifiedCount;
               });
             }
+          } else {
+            _addLog('JSON file not found for playlist: $playlistName');
           }
         }
       }
+      
+      _addLog('Scanned $processedDirs playlist directories');
+      
     } catch (e) {
       _addLog('Error processing directory: $e');
     }
@@ -352,3 +422,4 @@ class _PlaylistConverterScreenState extends State<PlaylistConverterScreen> {
     );
   }
 }
+
