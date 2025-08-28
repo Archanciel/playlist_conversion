@@ -36,70 +36,51 @@ Future<void> setWindowsAppSizeAndPosition({
 }
 
 class PlaylistConverterApp extends StatelessWidget {
-  const PlaylistConverterApp({super.key});
-
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'ZIP Playlist Converter',
+      title: 'Playlist JSON Converter',
       theme: ThemeData(
         primarySwatch: Colors.blue,
         useMaterial3: true,
       ),
-      home: ZipPlaylistConverterScreen(),
+      home: PlaylistConverterScreen(),
     );
   }
 }
 
-class ZipPlaylistConverterScreen extends StatefulWidget {
-  const ZipPlaylistConverterScreen({super.key});
-
+class PlaylistConverterScreen extends StatefulWidget {
   @override
-  _ZipPlaylistConverterScreenState createState() => _ZipPlaylistConverterScreenState();
+  _PlaylistConverterScreenState createState() => _PlaylistConverterScreenState();
 }
 
-class _ZipPlaylistConverterScreenState extends State<ZipPlaylistConverterScreen> {
-  String _selectedZipPath = '';
-  String _outputZipPath = '';
+class _PlaylistConverterScreenState extends State<PlaylistConverterScreen> {
+  String _selectedPath = '';
   bool _isProcessing = false;
   List<String> _logMessages = [];
-  int _totalJsonFilesFound = 0;
-  int _totalJsonFilesProcessed = 0;
+  int _totalPlaylistsProcessed = 0;
   int _totalAudiosModified = 0;
 
   void _addLog(String message) {
     setState(() {
       _logMessages.add('${DateTime.now().toString().substring(11, 19)}: $message');
     });
+    print(message);
   }
 
-  Future<void> _selectZipFile() async {
+  Future<void> _selectDirectory() async {
     try {
-      FilePickerResult? result = await FilePicker.platform.pickFiles(
-        type: FileType.custom,
-        allowedExtensions: ['zip'],
-      );
-
-      if (result != null && result.files.single.path != null) {
-        String selectedPath = result.files.single.path!;
-        String baseName = path.basenameWithoutExtension(selectedPath);
-        String directory = path.dirname(selectedPath);
-        String outputPath = path.join(directory, '${baseName}_converted.zip');
-
+      String? selectedDirectory = await FilePicker.platform.getDirectoryPath();
+      
+      if (selectedDirectory != null) {
         setState(() {
-          _selectedZipPath = selectedPath;
-          _outputZipPath = outputPath;
+          _selectedPath = selectedDirectory;
           _logMessages.clear();
-          _totalJsonFilesFound = 0;
-          _totalJsonFilesProcessed = 0;
-          _totalAudiosModified = 0;
         });
-        
-        _addLog('Fichier ZIP sélectionné: ${path.basename(_selectedZipPath)}');
-        _addLog('Sortie prévue: ${path.basename(_outputZipPath)}');
+        _addLog('Selected directory: $_selectedPath');
       }
     } catch (e) {
-      _addLog('Erreur lors de la sélection: $e');
+      _addLog('Error selecting directory: $e');
     }
   }
 
@@ -111,6 +92,7 @@ class _ZipPlaylistConverterScreenState extends State<ZipPlaylistConverterScreen>
       return audio;
     }
     
+    // If audioType doesn't exist, set default
     if (!audio.containsKey('audioType')) {
       audio['audioType'] = 'downloaded';
     }
@@ -118,181 +100,115 @@ class _ZipPlaylistConverterScreenState extends State<ZipPlaylistConverterScreen>
     return audio;
   }
 
-  int _processJsonContent(Map<String, dynamic> jsonData) {
-    int audioModifiedCount = 0;
-
-    // Process downloadedAudioLst
-    if (jsonData['downloadedAudioLst'] is List) {
-      List<dynamic> downloadedAudios = jsonData['downloadedAudioLst'];
-      for (var audio in downloadedAudios) {
-        if (audio is Map<String, dynamic> && audio.containsKey('isAudioImported')) {
-          _convertAudioObject(audio);
-          audioModifiedCount++;
-        }
-      }
-    }
-
-    // Process playableAudioLst
-    if (jsonData['playableAudioLst'] is List) {
-      List<dynamic> playableAudios = jsonData['playableAudioLst'];
-      for (var audio in playableAudios) {
-        if (audio is Map<String, dynamic> && audio.containsKey('isAudioImported')) {
-          _convertAudioObject(audio);
-          audioModifiedCount++;
-        }
-      }
-    }
-
-    return audioModifiedCount;
-  }
-
-  Future<void> _processZipFile() async {
-    if (_selectedZipPath.isEmpty) {
-      _addLog('Veuillez sélectionner un fichier ZIP');
-      return;
-    }
-
-    setState(() {
-      _isProcessing = true;
-      _logMessages.clear();
-      _totalJsonFilesFound = 0;
-      _totalJsonFilesProcessed = 0;
-      _totalAudiosModified = 0;
-    });
-
-    _addLog('Début du traitement du fichier ZIP...');
-
+  Future<int> _processPlaylistFile(String filePath) async {
     try {
-      // Lire le fichier ZIP
-      final bytes = await File(_selectedZipPath).readAsBytes();
-      final archive = ZipDecoder().decodeBytes(bytes);
+      String content = await File(filePath).readAsString();
+      Map<String, dynamic> playlistData = json.decode(content);
       
-      // Créer une nouvelle archive pour la sortie
-      final outputArchive = Archive();
+      int audioModifiedCount = 0;
+      bool hasIsAudioImported = false;
       
-      _addLog('ZIP ouvert avec ${archive.length} fichiers');
-
-      // Compter d'abord les fichiers JSON
-      for (final file in archive) {
-        if (file.name.endsWith('.json') && !file.name.contains('settings.json')) {
-          _totalJsonFilesFound++;
-        }
-      }
-      
-      _addLog('Trouvé $_totalJsonFilesFound fichiers JSON de playlist');
-
-      // Traiter chaque fichier
-      for (final file in archive) {
-        if (!_isProcessing) break;
-
-        if (file.isFile) {
-          if (file.name.endsWith('.json') && !file.name.contains('settings.json')) {
-            // C'est probablement un fichier de playlist
-            try {
-              final content = utf8.decode(file.content as List<int>);
-              final jsonData = json.decode(content) as Map<String, dynamic>;
-              
-              // Vérifier si c'est vraiment un fichier playlist
-              if (jsonData.containsKey('downloadedAudioLst') || jsonData.containsKey('playableAudioLst')) {
-                final modifiedCount = _processJsonContent(jsonData);
-                
-                if (modifiedCount > 0) {
-                  // Réécrire le JSON avec les modifications
-                  final newContent = JsonEncoder.withIndent('  ').convert(jsonData);
-                  final newBytes = utf8.encode(newContent);
-                  
-                  outputArchive.addFile(ArchiveFile(
-                    file.name,
-                    newBytes.length,
-                    newBytes,
-                  ));
-                  
-                  _addLog('✓ ${path.basename(file.name)}: $modifiedCount audio modifiés');
-                  
-                  setState(() {
-                    _totalJsonFilesProcessed++;
-                    _totalAudiosModified += modifiedCount;
-                  });
-                } else {
-                  // Pas de modification, copier tel quel
-                  outputArchive.addFile(ArchiveFile(
-                    file.name,
-                    file.content.length,
-                    file.content,
-                  ));
-                  _addLog('- ${path.basename(file.name)}: aucune modification nécessaire');
-                }
-              } else {
-                // Pas un fichier playlist, copier tel quel
-                outputArchive.addFile(ArchiveFile(
-                  file.name,
-                  file.content.length,
-                  file.content,
-                ));
-              }
-            } catch (e) {
-              _addLog('Erreur avec ${path.basename(file.name)}: $e');
-              // Copier le fichier original en cas d'erreur
-              outputArchive.addFile(ArchiveFile(
-                file.name,
-                file.content.length,
-                file.content,
-              ));
-            }
-          } else {
-            // Copier tous les autres fichiers tels quels
-            outputArchive.addFile(ArchiveFile(
-              file.name,
-              file.content.length,
-              file.content,
-            ));
+      // Check downloadedAudioLst
+      if (playlistData['downloadedAudioLst'] is List) {
+        List<dynamic> downloadedAudios = playlistData['downloadedAudioLst'];
+        for (var audio in downloadedAudios) {
+          if (audio is Map<String, dynamic> && audio.containsKey('isAudioImported')) {
+            hasIsAudioImported = true;
+            _convertAudioObject(audio);
+            audioModifiedCount++;
           }
         }
       }
-
-      // Sauvegarder le nouveau ZIP
-      final zipData = ZipEncoder().encode(outputArchive);
-      await File(_outputZipPath).writeAsBytes(zipData);
       
-      _addLog('✓ Nouveau ZIP sauvegardé: ${path.basename(_outputZipPath)}');
-
+      // Check playableAudioLst
+      if (playlistData['playableAudioLst'] is List) {
+        List<dynamic> playableAudios = playlistData['playableAudioLst'];
+        for (var audio in playableAudios) {
+          if (audio is Map<String, dynamic> && audio.containsKey('isAudioImported')) {
+            hasIsAudioImported = true;
+            _convertAudioObject(audio);
+            audioModifiedCount++;
+          }
+        }
+      }
+      
+      // Write back only if we found isAudioImported fields
+      if (hasIsAudioImported) {
+        String modifiedContent = JsonEncoder.withIndent('  ').convert(playlistData);
+        await File(filePath).writeAsString(modifiedContent);
+        _addLog('Converted $audioModifiedCount audio objects in ${path.basename(filePath)}');
+      }
+      
+      return audioModifiedCount;
     } catch (e) {
-      _addLog('Erreur lors du traitement: $e');
+      _addLog('Error processing ${path.basename(filePath)}: $e');
+      return 0;
     }
+  }
 
+  Future<void> _processAllPlaylists() async {
+    if (_selectedPath.isEmpty) {
+      _addLog('Please select a directory first');
+      return;
+    }
+    
+    setState(() {
+      _isProcessing = true;
+      _totalPlaylistsProcessed = 0;
+      _totalAudiosModified = 0;
+      _logMessages.clear();
+    });
+    
+    _addLog('Starting conversion...');
+    
+    try {
+      Directory rootDir = Directory(_selectedPath);
+      
+      await for (FileSystemEntity entity in rootDir.list()) {
+        if (!_isProcessing) break;
+        
+        if (entity is Directory) {
+          String playlistName = path.basename(entity.path);
+          String jsonFilePath = path.join(entity.path, '$playlistName.json');
+          
+          if (await File(jsonFilePath).exists()) {
+            int modifiedCount = await _processPlaylistFile(jsonFilePath);
+            if (modifiedCount > 0) {
+              setState(() {
+                _totalPlaylistsProcessed++;
+                _totalAudiosModified += modifiedCount;
+              });
+            }
+          }
+        }
+      }
+    } catch (e) {
+      _addLog('Error processing directory: $e');
+    }
+    
     setState(() {
       _isProcessing = false;
     });
-
-    _addLog('Traitement terminé!');
-    _addLog('Fichiers JSON traités: $_totalJsonFilesProcessed/$_totalJsonFilesFound');
-    _addLog('Total objets audio modifiés: $_totalAudiosModified');
-
-    if (mounted && _totalAudiosModified > 0) {
+    
+    _addLog('Conversion completed!');
+    _addLog('Playlists processed: $_totalPlaylistsProcessed');
+    _addLog('Audio objects modified: $_totalAudiosModified');
+    
+    if (mounted) {
       showDialog(
         context: context,
         builder: (BuildContext context) {
           return AlertDialog(
-            title: Text('Conversion Terminée'),
+            title: Text('Conversion Complete'),
             content: Column(
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text('Fichiers JSON traités: $_totalJsonFilesProcessed'),
-                Text('Objets audio modifiés: $_totalAudiosModified'),
-                Text(''),
-                Text('Fichier de sortie:'),
-                Text(path.basename(_outputZipPath), style: TextStyle(fontWeight: FontWeight.bold)),
+                Text('Playlists processed: $_totalPlaylistsProcessed'),
+                Text('Audio objects modified: $_totalAudiosModified'),
               ],
             ),
             actions: [
-              TextButton(
-                child: Text('Ouvrir le dossier'),
-                onPressed: () {
-                  Navigator.of(context).pop();
-                  Process.run('explorer', ['/select,$_outputZipPath']);
-                },
-              ),
               TextButton(
                 child: Text('OK'),
                 onPressed: () => Navigator.of(context).pop(),
@@ -307,8 +223,7 @@ class _ZipPlaylistConverterScreenState extends State<ZipPlaylistConverterScreen>
   void _clearLog() {
     setState(() {
       _logMessages.clear();
-      _totalJsonFilesFound = 0;
-      _totalJsonFilesProcessed = 0;
+      _totalPlaylistsProcessed = 0;
       _totalAudiosModified = 0;
     });
   }
@@ -317,7 +232,7 @@ class _ZipPlaylistConverterScreenState extends State<ZipPlaylistConverterScreen>
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: Text('Convertisseur ZIP Playlist'),
+        title: Text('Playlist JSON Converter'),
         backgroundColor: Theme.of(context).colorScheme.inversePrimary,
       ),
       body: Padding(
@@ -332,12 +247,11 @@ class _ZipPlaylistConverterScreenState extends State<ZipPlaylistConverterScreen>
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      'Convertisseur ZIP de Playlists',
+                      'Convert: "isAudioImported" → "audioType"',
                       style: Theme.of(context).textTheme.headlineSmall,
                     ),
                     SizedBox(height: 8),
-                    Text('Sélectionnez un ZIP contenant les fichiers JSON des playlists'),
-                    Text('Conversion: "isAudioImported" → "audioType"'),
+                    Text('Select the directory containing playlist subdirectories'),
                   ],
                 ),
               ),
@@ -347,20 +261,16 @@ class _ZipPlaylistConverterScreenState extends State<ZipPlaylistConverterScreen>
               children: [
                 Expanded(
                   child: ElevatedButton.icon(
-                    onPressed: _isProcessing ? null : _selectZipFile,
-                    icon: Icon(Icons.archive),
-                    label: Text(_selectedZipPath.isEmpty 
-                      ? 'Sélectionner fichier ZIP' 
-                      : path.basename(_selectedZipPath)),
+                    onPressed: _isProcessing ? null : _selectDirectory,
+                    icon: Icon(Icons.folder_open),
+                    label: Text(_selectedPath.isEmpty ? 'Select Directory' : path.basename(_selectedPath)),
                   ),
                 ),
                 SizedBox(width: 8),
                 ElevatedButton.icon(
-                  onPressed: (_isProcessing || _selectedZipPath.isEmpty) 
-                    ? null 
-                    : _processZipFile,
-                  icon: Icon(Icons.transform),
-                  label: Text('Convertir ZIP'),
+                  onPressed: (_isProcessing || _selectedPath.isEmpty) ? null : _processAllPlaylists,
+                  icon: Icon(Icons.play_arrow),
+                  label: Text('Convert'),
                   style: ElevatedButton.styleFrom(
                     backgroundColor: Colors.green,
                     foregroundColor: Colors.white,
@@ -370,7 +280,7 @@ class _ZipPlaylistConverterScreenState extends State<ZipPlaylistConverterScreen>
                 ElevatedButton.icon(
                   onPressed: _clearLog,
                   icon: Icon(Icons.clear),
-                  label: Text('Effacer'),
+                  label: Text('Clear'),
                 ),
               ],
             ),
@@ -383,23 +293,7 @@ class _ZipPlaylistConverterScreenState extends State<ZipPlaylistConverterScreen>
                     children: [
                       LinearProgressIndicator(),
                       SizedBox(height: 8),
-                      Text('Traitement en cours... $_totalJsonFilesProcessed / $_totalJsonFilesFound fichiers'),
-                      Text('$_totalAudiosModified objets audio modifiés'),
-                    ],
-                  ),
-                ),
-              ),
-            if (_outputZipPath.isNotEmpty && !_isProcessing)
-              Card(
-                color: Colors.blue.shade50,
-                child: Padding(
-                  padding: const EdgeInsets.all(16.0),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text('Fichier de sortie:', style: TextStyle(fontWeight: FontWeight.bold)),
-                      Text(path.basename(_outputZipPath)),
-                      Text('Répertoire: ${path.dirname(_outputZipPath)}'),
+                      Text('Processing... $_totalPlaylistsProcessed playlists, $_totalAudiosModified audio objects modified'),
                     ],
                   ),
                 ),
@@ -413,7 +307,7 @@ class _ZipPlaylistConverterScreenState extends State<ZipPlaylistConverterScreen>
                     Padding(
                       padding: const EdgeInsets.all(16.0),
                       child: Text(
-                        'Journal',
+                        'Log',
                         style: Theme.of(context).textTheme.titleMedium,
                       ),
                     ),
@@ -424,7 +318,7 @@ class _ZipPlaylistConverterScreenState extends State<ZipPlaylistConverterScreen>
                         child: _logMessages.isEmpty
                           ? Center(
                               child: Text(
-                                'Sélectionnez un fichier ZIP et cliquez sur Convertir',
+                                'Select directory and click Convert',
                                 style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                                   color: Colors.grey,
                                 ),
